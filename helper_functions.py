@@ -1,7 +1,6 @@
 """
-This is a script which will do two main things:
-1. Plot individual profiles
-2. Plot profile locations on a map
+This is a script contains helper functions which are called to make plots by the
+`make_plots.py` script
 
 made by: Mikhail Schee (June 2022)
 """
@@ -14,15 +13,35 @@ import matplotlib as mpl
 import pandas as pd
 # For searching and listing directories
 import os
+# For matching regular expressions
+import re
 # For formatting date objects
 import datetime
 # For reading the ITP `cormat` files
 import mat73
 from scipy import io
 
-science_data_file_path = '/Users/Grey/Documents/Research/Science_Data/'
-dark_mode = True
+"""
+To install Cartopy and its dependencies, follow:
+https://scitools.org.uk/cartopy/docs/latest/installing.html#installing
 
+Relevent command:
+$ conda install -c conda-forge cartopy
+"""
+import cartopy.crs as ccrs
+import cartopy.feature
+
+################################################################################
+# This is the location of the data on your computer
+science_data_file_path = '/Users/Grey/Documents/Research/Science_Data/'
+
+################################################################################
+################################################################################
+# Declare plotting variables
+################################################################################
+################################################################################
+
+dark_mode = True
 # Enable dark mode plotting
 if dark_mode:
     plt.style.use('dark_background')
@@ -48,7 +67,7 @@ lgnd_mrk_size = 60
 map_mrk_size  = 7
 pf_mrk_size   = 30
 std_marker = '.'
-map_marker = '.' #'x'
+map_marker = '.'
 map_ln_wid = 0.5
 
 #   Get list of standard colors
@@ -63,6 +82,8 @@ cmap_pf_no = 'plasma'
 cmap_p     = 'cividis'
 cmap_date  = 'viridis'
 cmap_den_h = 'magma'
+
+map_extent = 'Western_Arctic'
 
 ################################################################################
 ################################################################################
@@ -113,6 +134,14 @@ def load_data(plt_dict):
         use_these_filters = filters[i]
     else:
         use_these_filters = None
+    # Check to see if there is a white_list
+    #   Note: expects dictionary of dictionaries, like {source: {instrmt: [x,y,z]}}
+    #     and you need to have a source/instrmt pair for all you entered in 'data_sources'
+    #   Ex: {'AIDJEX': {'BigBear': ['1','3'], 'Caribou': ['5']}, 'ITP': {'2': ['1','3']}}
+    if not isinstance(use_these_filters, type(None)) and 'white_list' in use_these_filters.keys():
+        white_list = use_these_filters['white_list']
+    else:
+        white_list = None
     # Create a blank list to add each profile to
     output_list = []
     # Loop through the given sources
@@ -137,10 +166,23 @@ def load_data(plt_dict):
             exit(0)
             continue
         #
+        # Check to see if there is a white_list for this data source
+        if not isinstance(white_list, type(None)):
+            # Check source
+            if source_type in white_list.keys():
+                specific_white_list = white_list[source_type]
+                if instrmt in specific_white_list.keys():
+                    specific_white_list = specific_white_list[instrmt]
+                else:
+                    specific_white_list = None
+            else:
+                specific_white_list = None
+        else:
+            specific_white_list = None
         print('\t Loading',len(data_files),'files')
         for file in data_files:
             # Read in the data file for this profile
-            pf_df = read_data_file(file_path, file, instrmt, format)
+            pf_df = read_data_file(file_path, file, instrmt, format, specific_white_list)
             if not isinstance(pf_df, type(None)):
                 # Apply filters (works even if filters=None)
                 pf_df = filter_data(pf_df, use_these_filters)
@@ -254,7 +296,7 @@ black_list = {'BigBear': [531, 535, 537, 539, 541, 543, 545, 547, 549],
 
 ################################################################################
 
-def read_AIDJEX_data_file(file_path, file_name, instrmt, format):
+def read_AIDJEX_data_file(file_path, file_name, instrmt, format, white_list):
     """
     Reads certain data from an AIDJEX profile file
     Returns an array of strings
@@ -263,6 +305,7 @@ def read_AIDJEX_data_file(file_path, file_name, instrmt, format):
     file_name           string of the file name of a specific file
     instrmt             string of the instrument that took the data in the file
     format              Irrelevant for AIDJEX data
+    white_list          Optional list of profile numbers to actually load
     """
     # Assuming file name format instrmt_YYY where the profile number,
     #   YYY, is always 3 digits
@@ -271,6 +314,10 @@ def read_AIDJEX_data_file(file_path, file_name, instrmt, format):
     if prof_no in black_list[instrmt]:
         print('Skipping',instrmt,'profile',prof_no)
         return None
+    # If there's a white_list, check to see if this profile is on it
+    if not isinstance(white_list, type(None)):
+        if str(prof_no) not in white_list:
+            return None
     # Declare variables
     lon = None
     lat = None
@@ -336,7 +383,7 @@ def read_AIDJEX_data_file(file_path, file_name, instrmt, format):
 
 ################################################################################
 
-def read_ITP_data_file(file_path, file_name, instrmt, format):
+def read_ITP_data_file(file_path, file_name, instrmt, format, white_list):
     """
     Reads certain data from an ITP profile file
     Returns a pandas dataframe
@@ -345,6 +392,7 @@ def read_ITP_data_file(file_path, file_name, instrmt, format):
     file_name           string of the file name of a specific file
     instrmt             string of the instrument that took the data in the file
     format              either 'cormat' or 'final'
+    white_list          Optional list of profile numbers to actually load
     """
     # Make sure it isn't a 'sami' file instead of a 'grd' file
     if 'sami' in file_name:
@@ -374,6 +422,10 @@ def read_ITP_data_file(file_path, file_name, instrmt, format):
         if prof_no in black_list[instrmt]:
             print('Skipping',instrmt,'profile',prof_no)
             return
+    # If there's a white_list, check to see if this profile is on it
+    if not isinstance(white_list, type(None)):
+        if str(prof_no) not in white_list:
+            return None
     # Load data based on itp file format
     if format == 'final':
         load_itp = load_final_itp
@@ -674,7 +726,7 @@ def add_std_legend(ax, data, x_key):
 
 ################################################################################
 ################################################################################
-# Admin functions for plotting
+# Main function for plotting
 ################################################################################
 ################################################################################
 
@@ -755,7 +807,6 @@ def plot_data(ax, data, plt_dict, fig, ax_pos):
         data = find_date_res(data)
         # Make sure to convert the datetime objects to numbers for plotting
         res = data['res'].astype('timedelta64[h]')
-        print(res)
         # Find overall statistics
         median  = np.median(res)
         mean    = np.mean(res)
@@ -920,8 +971,8 @@ def plot_data(ax, data, plt_dict, fig, ax_pos):
         # Make the 2D histogram, the number of bins really changes the outcome
         heatmap = ax.hist2d(data[x_key], data[y_key], bins=250, cmap=cmap_den_h, vmin=clr_min, vmax=clr_max)
         # `hist2d` returns a tuple, the index 3 of which is the mappable for a colorbar
-        # cbar = plt.colorbar(heatmap[3], ax=ax, extend=clr_ext)
-        # cbar.set_label('density of points')
+        cbar = plt.colorbar(heatmap[3], ax=ax, extend=clr_ext)
+        cbar.set_label('density of points')
         # Add title
         plt_title = add_std_title(plt_dict, plt_title, data)
         # Add legend
@@ -933,6 +984,10 @@ def plot_data(ax, data, plt_dict, fig, ax_pos):
     #
     return xlabel, ylabel, plt_title, ax
 
+################################################################################
+################################################################################
+# Functions to make other kinds of plots
+################################################################################
 ################################################################################
 
 def plot_arctic_map(ax, data, plt_dict, plt_title, fig, ax_pos):
@@ -986,9 +1041,6 @@ def plot_arctic_map(ax, data, plt_dict, plt_title, fig, ax_pos):
     gl.ylabel_style = {'size':6, 'color':clr_lines}
     #   Plotting the coastlines takes a really long time
     # ax.coastlines()
-    #   Add bounding box to show lat-lon
-    ax.add_patch(mpl.patches.Rectangle(xy=[-155,72], width=25, height=6, edgecolor='b', facecolor='red', alpha=0.3, transform=ccrs.PlateCarree()))
-    ax.plot([-155,-135], [72,72], transform=ccrs.PlateCarree(), color='red', lw=2)
     #
     # Remove rows of the data frame with missing data for lon and lat
     data = data[data.lon.notnull() & data.lat.notnull()]
@@ -1002,9 +1054,6 @@ def plot_arctic_map(ax, data, plt_dict, plt_title, fig, ax_pos):
         # print(instrmt_df)
         pfs_to_plot = np.unique(np.array(instrmt_df['prof_no']))
         for prof_no in pfs_to_plot:
-            # print('    For profile:',prof_no, type(prof_no))
-            # pf_df = instrmt_df[instrmt_df['prof_no']==prof_no]
-            # print(pf_df)
             # Get the longitude and latitude values
             pf_df_lon = instrmt_df[instrmt_df['prof_no']==prof_no].lon
             pf_df_lat = instrmt_df[instrmt_df['prof_no']==prof_no].lat
@@ -1174,6 +1223,10 @@ def plot_profiles(ax, data, plt_dict, plt_title):
         #
     #
     # Plot each profile
+    if len(profile_dictionaries) > 15:
+        print("You are trying to plot",len(profile_dictionaries),"profiles.")
+        print("That is too many. Try less than 15")
+        exit(0)
     for i in range(len(profile_dictionaries)):
         data = profile_dictionaries[i]
         # Decide on marker and line styles, don't go off the end of the array
@@ -1233,5 +1286,117 @@ def plot_profiles(ax, data, plt_dict, plt_title):
     #
     # Return new axis so it's labels and title can be changed later
     return ax, plt_title
+
+################################################################################
+
+def find_p_res(data):
+    """
+    Finds the difference between each sequential pressure measurement in each
+    profile in the data and stores it as a new column called 'res'
+
+    df      A pandas DataFrame with the following columns:
+        instrmt     A string of the instrmt name that took the profile
+        prof_no     The profile number
+        temp        An array of temperature values
+        salt        An array of salinity values
+        p           An array of depth values (in m)
+    """
+    # Add a new column for the resolution values
+    data['res'] = None
+    # Create an empty list to add each modified profile to
+    output_list = []
+    # Loop across each instrument
+    instrmts = np.unique(np.array(data['instrmt']))
+    for instrmt in instrmts:
+        # Find the data for just that instrument
+        data_instrmt = data[data.instrmt == instrmt]
+        # Loop across each profile
+        pfs = np.unique(np.array(data['prof_no']))
+        for pf in pfs:
+            # Find the data just for that profile
+            data_pf = data_instrmt[data_instrmt.prof_no == pf]
+            # Sort that profile by the pressure (depth) values
+            data_sorted = data_pf.sort_values(by='p')
+            # Add first difference of depth values to data frame
+            data_sorted['res'] = abs(data_sorted['p'].diff())
+            # Add that dataframe to the list
+            output_list.append(data_sorted)
+        #
+    #
+    # Combine all the modified profile data frames into one
+    data = pd.concat(output_list)
+    # Remove rows of the data frame with missing data
+    #   Note: only apply to res because 'format' will often be
+    #       set to a null value, for exmaple with AIDJEX data
+    data = data[data.res.notnull()]
+    return data
+
+################################################################################
+
+def find_date_res(data):
+    """
+    Finds the difference between each sequential date measurement of each
+    profile in the data and stores it as a new column called 'res'
+
+    df      A pandas DataFrame with the following columns:
+        instrmt     A string of the instrmt name that took the profile
+        prof_no     The profile number
+        temp        An array of temperature values
+        salt        An array of salinity values
+        p           An array of depth values (in m)
+    """
+    # Create an empty list to add each modified profile to
+    output_list = []
+    # Get the unique profiles from the data for each instrument
+    unique_instrmts = np.unique(np.array(data['instrmt']))
+    for instrmt in unique_instrmts:
+        # Create blank dataframe in which to collect profile info
+        date_df = pd.DataFrame({'source':[], 'instrmt':[], 'prof_no':[], 'date':[], 'res':[], 'format':[], 'notes':[]})
+        # print('For instrument:',instrmt, type(instrmt))
+        instrmt_df = data[data['instrmt'] == instrmt]
+        # print(instrmt_df)
+        pfs_to_plot = np.unique(np.array(instrmt_df['prof_no']))
+        for prof_no in pfs_to_plot:
+            # print('    For profile:',prof_no, type(prof_no))
+            # Get the source, date, format, and notes values
+            pf_df_sou = instrmt_df[instrmt_df['prof_no']==prof_no].source
+            pf_df_date= instrmt_df[instrmt_df['prof_no']==prof_no].date
+            pf_df_form= instrmt_df[instrmt_df['prof_no']==prof_no].format
+            pf_df_note= instrmt_df[instrmt_df['prof_no']==prof_no].notes
+            # Just take the source, date, format, and notes values from
+            #   the first entry, close enough
+            source = np.unique(np.array(pf_df_sou))[0]
+            date   = np.unique(np.array(pf_df_date))[0]
+            format = np.unique(np.array(pf_df_form))[0]
+            notes  = np.unique(np.array(pf_df_note))[0]
+            # Add values to a dictionary
+            pf_dict = {'source': source,
+                       'instrmt': instrmt,
+                       'prof_no': prof_no,
+                       'date': date,
+                       'res': None,
+                       'format': format,
+                       'notes': notes
+                      }
+            #
+            # Add to the list of profile dataframes
+            date_df = date_df.append(pf_dict, ignore_index=True)
+        #
+        # Sort that instrument's dataframe by the date values
+        data_sorted = date_df.sort_values(by=['date'])
+        # Add first difference of date values to data frame
+        data_sorted['res'] = abs(data_sorted['date'].diff())
+        # Add that dataframe to the list
+        output_list.append(data_sorted)
+    #
+    # Combine all the modified profile data frames into one
+    df = pd.concat(output_list)
+    # Remove rows of the data frame with missing data
+    #   Note: only apply to res because 'format' will often be
+    #       set to a null value, for exmaple with AIDJEX data
+    df = df[df.res.notnull()]
+    # print(df)
+    # exit(0)
+    return df
 
 ################################################################################
